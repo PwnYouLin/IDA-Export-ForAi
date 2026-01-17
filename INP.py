@@ -80,7 +80,8 @@ def export_decompiled_functions(export_dir):
     exported_funcs = 0
     failed_funcs = []
     skipped_funcs = []
-    filename_counter = {}  # 用于处理重名函数
+    function_index = []  # 用于生成索引文件
+    addr_to_info = {}  # 地址到函数信息的映射
 
     # 收集所有函数地址
     all_funcs = list(idautils.Functions())
@@ -126,16 +127,9 @@ def export_decompiled_functions(export_dir):
             output_lines.append("")
             output_lines.append(dec_str)
 
-            # 使用函数名作为文件名，处理特殊字符和重名
+            # 使用函数名+地址作为文件名，确保唯一性
             safe_name = sanitize_filename(func_name)
-
-            # 处理重名：如果文件名已存在，添加地址后缀
-            if safe_name in filename_counter:
-                filename_counter[safe_name] += 1
-                output_filename = "{}_{:X}.c".format(safe_name, func_ea)
-            else:
-                filename_counter[safe_name] = 1
-                output_filename = "{}.c".format(safe_name)
+            output_filename = "{}_{:X}.c".format(safe_name, func_ea)
 
             output_path = os.path.join(decompile_dir, output_filename)
 
@@ -148,6 +142,17 @@ def export_decompiled_functions(export_dir):
             except IOError as io_err:
                 failed_funcs.append((func_ea, func_name, "IO error: {}".format(str(io_err))))
                 continue
+
+            # 记录到索引和映射表
+            func_info = {
+                'address': func_ea,
+                'name': func_name,
+                'filename': output_filename,
+                'callers': callers,
+                'callees': callees
+            }
+            function_index.append(func_info)
+            addr_to_info[func_ea] = func_info
 
             exported_funcs += 1
 
@@ -189,6 +194,61 @@ def export_decompiled_functions(export_dir):
             for addr, name, reason in skipped_funcs:
                 f.write("{} | {} | {}\n".format(hex(addr), name, reason))
         print("    Skipped list saved to: decompile_skipped.txt")
+
+    # 生成函数索引文件
+    if function_index:
+        index_path = os.path.join(export_dir, "function_index.txt")
+        with open(index_path, 'w', encoding='utf-8') as f:
+            f.write("# Function Index\n")
+            f.write("# Total exported functions: {}\n".format(len(function_index)))
+            f.write("#" + "=" * 80 + "\n\n")
+
+            for func_info in function_index:
+                f.write("=" * 80 + "\n")
+                f.write("Function: {}\n".format(func_info['name']))
+                f.write("Address: {}\n".format(hex(func_info['address'])))
+                f.write("File: {}\n".format(func_info['filename']))
+                f.write("\n")
+
+                # 写入调用者信息
+                if func_info['callers']:
+                    f.write("Called by ({} callers):\n".format(len(func_info['callers'])))
+                    for caller_addr in func_info['callers']:
+                        if caller_addr in addr_to_info:
+                            caller_info = addr_to_info[caller_addr]
+                            f.write("  - {} ({}) -> {}\n".format(
+                                hex(caller_addr),
+                                caller_info['name'],
+                                caller_info['filename']
+                            ))
+                        else:
+                            caller_name = idc.get_func_name(caller_addr)
+                            f.write("  - {} ({})\n".format(hex(caller_addr), caller_name))
+                else:
+                    f.write("Called by: none\n")
+
+                f.write("\n")
+
+                # 写入被调用函数信息
+                if func_info['callees']:
+                    f.write("Calls ({} callees):\n".format(len(func_info['callees'])))
+                    for callee_addr in func_info['callees']:
+                        if callee_addr in addr_to_info:
+                            callee_info = addr_to_info[callee_addr]
+                            f.write("  - {} ({}) -> {}\n".format(
+                                hex(callee_addr),
+                                callee_info['name'],
+                                callee_info['filename']
+                            ))
+                        else:
+                            callee_name = idc.get_func_name(callee_addr)
+                            f.write("  - {} ({})\n".format(hex(callee_addr), callee_name))
+                else:
+                    f.write("Calls: none\n")
+
+                f.write("\n")
+
+        print("    Function index saved to: function_index.txt")
 
 def export_strings(export_dir):
     """导出所有字符串"""
